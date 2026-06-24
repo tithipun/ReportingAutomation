@@ -1,0 +1,2 @@
+SELECT *
+FROM da.USER_FILTER uf 

@@ -1,0 +1,19 @@
+SELECT *
+FROM HBI_SEQUENCED_DEMAND HBISD
+where hbisd.style_code = '225209' and hbisd.SIZE_code = '41'
+
+
+SELECT *
+FROM DELSPIN_MPS_LATENESS_RESULTS Del
+WHERE del.selling_Style_Cd = '2252P6' AND del.selling_size_cd ='42'
+
+SELECT *
+FROM HBI_SEQUENCED_DEMAND HBISD
+where hbisd.style_code = '40760' and hbisd.color_CD = '100'
+
+SELECT *
+FROM OPRSQL.ISS_MPS_GROSS_DEMAND_MV A
+WHERE A.SELLING_STYLE_CD='7349K0' AND A.DUE_IN_DC_DATE<TO_DATE('2025-12-01', 'YYYY-MM-DD')
+
+SELECT * FROM da.dpr_sku_overrides
+WHERE STYLE_CD ='40760' AND color_CD in ('100','50W')

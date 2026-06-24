@@ -1,0 +1,5 @@
+SELECT column_name FROM information_schema.columns WHERE table_name = 'ibp_product';
+SELECT COLUMN_NAME FROM USER_TAB_COLUMNS WHERE TABLE_NAME = 'IBP_PRODUCT';
+
+SELECT * 
+FROM USER_TAB_COLUMNS WHERE TABLE_NAME = 'Disco';
