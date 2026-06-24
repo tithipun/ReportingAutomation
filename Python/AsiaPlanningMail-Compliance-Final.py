@@ -1,7 +1,12 @@
+# Testing Git
+
 import os
+import sys
 import datetime
 import smtplib
+import socket
 import time
+import logging
 
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -12,6 +17,11 @@ import win32com.client
 from PIL import ImageGrab
 
 
+# Logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
+
+
 # ---------- FUNCTION 0: GET LATEST EXCEL FILE ----------
 def get_latest_excel(folder_dir):
     """
@@ -20,17 +30,21 @@ def get_latest_excel(folder_dir):
     """
     prefix = "AIPS Compliance Report"
 
-    candidates = [
-        os.path.join(folder_dir, f)
-        for f in os.listdir(folder_dir)
-        if f.startswith(prefix) and f.lower().endswith(".xlsx")
-    ]
+    try:
+        files = os.listdir(folder_dir)
+    except OSError as e:
+        raise FileNotFoundError(f"Cannot list folder {folder_dir}: {e}") from e
 
+    candidates = [os.path.join(folder_dir, f) for f in files if f.startswith(prefix) and f.lower().endswith(".xlsx")]
     if not candidates:
-        raise FileNotFoundError(f"No Excel file found starting with: {prefix}")
+        raise FileNotFoundError(f"No Excel file found starting with: {prefix} in {folder_dir}")
 
-    latest_file = max(candidates, key=os.path.getmtime)
-    print(f"Using latest Excel file: {latest_file}")
+    try:
+        latest_file = max(candidates, key=os.path.getmtime)
+    except OSError as e:
+        raise RuntimeError(f"Failed to determine newest file in {folder_dir}: {e}") from e
+
+    log.info("Using latest Excel file: %s", latest_file)
     return latest_file
 
 
@@ -39,40 +53,56 @@ def excel_to_img(excel_path, img_path, sheet, r1, c1, r2, c2):
     """
     Captures a range from Excel and saves it as an image.
     """
-    excel = win32com.client.DispatchEx("Excel.Application")
-    excel.Visible = False
-    excel.DisplayAlerts = False
-
-    wb = excel.Workbooks.Open(excel_path)
-
+    excel = None
+    wb = None
     try:
-        ws = wb.Worksheets(sheet)
-    except Exception as e:
-        wb.Close(False)
-        excel.Quit()
-        raise ValueError(f"Worksheet '{sheet}' not found in {excel_path}") from e
+        excel = win32com.client.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        wb = excel.Workbooks.Open(excel_path)
 
-    rng = ws.Range(ws.Cells(r1, c1), ws.Cells(r2, c2))
-    rng.CopyPicture(Appearance=1, Format=2)  # xlScreen, xlBitmap
+        try:
+            ws = wb.Worksheets(sheet)
+        except Exception as e:
+            raise ValueError(f"Worksheet '{sheet}' not found in {excel_path}") from e
 
-    time.sleep(1)
+        rng = ws.Range(ws.Cells(r1, c1), ws.Cells(r2, c2))
+        rng.CopyPicture(Appearance=1, Format=2)
 
-    img = ImageGrab.grabclipboard()
-    if img is None:
-        wb.Close(False)
-        excel.Quit()
-        raise RuntimeError("Failed to grab image from clipboard")
+        time.sleep(0.5)
 
-    img.save(img_path)
+        img = None
+        attempts = 3
+        for i in range(attempts):
+            img = ImageGrab.grabclipboard()
+            if img is not None:
+                break
+            time.sleep(0.5)
 
-    wb.Close(False)
-    excel.Quit()
+        if img is None:
+            raise RuntimeError("Failed to grab image from clipboard after retries")
+
+        img.save(img_path)
+
+    finally:
+        if wb is not None:
+            try:
+                wb.Close(False)
+            except Exception:
+                log.exception("Failed to close workbook")
+        if excel is not None:
+            try:
+                excel.Quit()
+            except Exception:
+                log.exception("Failed to quit Excel")
 
 
 # ---------- FUNCTION 2: SEND EMAIL WITH INLINE IMAGE ----------
 def send_mail(subject, week, img_path, folder_yyyyww):
-    username = "AsiaPlanning@hanes.com"
-    password = "v8vN9bjM99"  # ⚠️ move to env variable in production
+    username = os.environ.get("AIPS_EMAIL_USER", "AsiaPlanning@hanes.com")
+    password = os.environ.get("AIPS_EMAIL_PASS")
+    if not password:
+        raise RuntimeError("Missing AIPS_EMAIL_PASS environment variable")
 
     html = f"""
     <!DOCTYPE html>
@@ -135,13 +165,26 @@ def send_mail(subject, week, img_path, folder_yyyyww):
         mime.add_header("Content-ID", "<image1>")
         msg.attach(mime)
 
-    server = smtplib.SMTP("smtp-mail.outlook.com", 587)
-    server.starttls()
-    server.login(username, password)
-    server.send_message(msg)
-    server.quit()
+    smtp_host = "smtp-mail.outlook.com"
+    smtp_port = 587
 
-    print("Email sent successfully")
+    attempts = 3
+    backoff = 1.0
+    for attempt in range(1, attempts + 1):
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
+                server.ehlo()
+                server.starttls()
+                server.login(username, password)
+                server.send_message(msg)
+            log.info("Email sent successfully")
+            return
+        except (smtplib.SMTPException, socket.timeout, ConnectionRefusedError) as exc:
+            log.exception("Attempt %s: failed to send email: %s", attempt, exc)
+            if attempt == attempts:
+                raise
+            time.sleep(backoff)
+            backoff *= 2
 
 
 # ---------- MAIN FUNCTION ----------
